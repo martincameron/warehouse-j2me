@@ -1,7 +1,7 @@
 Manifest-Version: 1.0
 MIDlet-1: Warehouse, , warehouse.Warehouse
 MIDlet-Name: Warehouse
-MIDlet-Version: 1.0.0
+MIDlet-Version: 1.1.0
 MIDlet-Vendor: mumart@gmail.com
 MicroEdition-Configuration: CLDC-1.0
 MicroEdition-Profile: MIDP-1.0
