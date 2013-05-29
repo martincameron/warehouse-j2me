@@ -3,6 +3,7 @@ package warehouse;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.util.Random;
 
 import javax.microedition.lcdui.Alert;
 import javax.microedition.lcdui.Canvas;
@@ -20,40 +21,45 @@ import javax.microedition.lcdui.StringItem;
 import javax.microedition.midlet.MIDlet;
 
 /*
-	A Sokoban clone for J2ME (c)2012 mumart@gmail.com
+	A Sokoban clone for J2ME (c)2013 mumart@gmail.com
 */
 public final class Warehouse extends MIDlet implements CommandListener {
-	public static final String VERSION = "1.0 (c)2012 mumart@ gmail.com";
+	public static final String VERSION = "1.1 (c)2013 mumart@ gmail.com";
 
 	private WarehouseCanvas warehouseCanvas;
-	private Command gameCommand, helpCommand, backCommand, quitCommand;
-	private List gameList;
+	private Command backCommand, levelCommand, gameCommand, helpCommand, quitCommand;
+	private List gameList, levelList;
 	private Form helpForm;
 
 	public Warehouse() throws Exception {
-		String[] levels = readCatalog( "/warehouse/levels/levels.cat" );
-		warehouseCanvas = new WarehouseCanvas( "/warehouse/levels/" + levels[ 0 ] + ".lev" );
-		gameCommand = new Command( "Game", Command.SCREEN, 1 );
-		helpCommand = new Command( "Help", Command.SCREEN, 1 );
-		backCommand = new Command( "Back", Command.SCREEN, 1 );
-		quitCommand = new Command( "Quit", Command.SCREEN, 1 );
-		gameList = new List( "Select Game", List.IMPLICIT, levels, null );
+		String[] games = readCatalog( "/warehouse/levels/levels.cat" );
+		backCommand = new Command( "Back", Command.BACK, 1 );
+		levelCommand = new Command( "Level", Command.SCREEN, 1 );
+		gameCommand = new Command( "Game", Command.SCREEN, 2 );
+		helpCommand = new Command( "Help", Command.SCREEN, 3 );
+		quitCommand = new Command( "Quit", Command.EXIT, 4 );
+		gameList = new List( "Select Game", List.IMPLICIT, games, null );
 		gameList.addCommand( backCommand );
-		gameList.addCommand( quitCommand );
 		gameList.setCommandListener( this );
+		levelList = new List( "Select Level", List.IMPLICIT );
+		levelList.addCommand( backCommand );
+		levelList.setCommandListener( this );
+		warehouseCanvas = new WarehouseCanvas( "/warehouse/levels/" + games[ 0 ] + ".lev", levelList );	
 		helpForm = new Form( "Warehouse", new Item[] {
 			new StringItem( "About: ", "A Sokoban clone, " +
 				"using level data from http://sokobano.de" ),
 			new StringItem( "How To Play: ",
 				"Push the yellow crates onto the red places using your directional keys. " +
 				"Press '#' to reset the board or skip to the next level. " +
-				"Press '*' to reset the board or skip forward 10 levels. Have fun!" ),
+				"Press '*' to reset the board or skip to a random level. Have fun!" ),
 			new StringItem( "Version: ", VERSION )
 		} );
 		helpForm.addCommand( backCommand );
 		helpForm.setCommandListener( this );
 		warehouseCanvas.addCommand( gameCommand );
+		warehouseCanvas.addCommand( levelCommand );
 		warehouseCanvas.addCommand( helpCommand );
+		warehouseCanvas.addCommand( quitCommand );
 		warehouseCanvas.setCommandListener( this );
 	}
 
@@ -73,9 +79,18 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		try {
 			if( c == gameCommand ) {
 				display.setCurrent( gameList );
-			} else if( c == List.SELECT_COMMAND && d == gameList ) {
-				String name = gameList.getString( gameList.getSelectedIndex() );
-				warehouseCanvas.loadGame( "/warehouse/levels/" + name + ".lev" );
+			} else if( c == levelCommand ) {
+				display.setCurrent( levelList );
+			} else if( c == List.SELECT_COMMAND ) {
+				if( d == gameList ) {
+					levelList = new List( "Select Level", List.IMPLICIT );
+					levelList.addCommand( backCommand );
+					levelList.setCommandListener( this );
+					String name = gameList.getString( gameList.getSelectedIndex() );
+					warehouseCanvas.loadGame( "/warehouse/levels/" + name + ".lev", levelList );
+				} else if( d == levelList ) {
+					warehouseCanvas.setLevel( levelList.getSelectedIndex() );
+				}
 				display.setCurrent( warehouseCanvas );
 			} else if( c == helpCommand ) {
 				display.setCurrent( helpForm );
@@ -91,18 +106,8 @@ public final class Warehouse extends MIDlet implements CommandListener {
 
 	private String[] readCatalog( String resource ) throws IOException {
 		// Load the resource.
-		int len = 0;
 		byte[] buf = new byte[ 1024 ];
-		InputStream input = getClass().getResourceAsStream( resource );
-		try {
-			int count = 0;
-			while( count >= 0 && len < buf.length ) {
-				len += count;
-				count = input.read( buf, len, buf.length - len );
-			}
-		} finally {
-			input.close();
-		}
+		int len = readResource( resource, buf );
 		// Count the number of lines.
 		int entries = 0;
 		for( int idx = 0; idx < len; idx++ ) {
@@ -121,6 +126,21 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		}		
 		return catalog;
 	}
+
+	public static int readResource( String resource, byte[] buf ) throws IOException {
+		InputStream input = resource.getClass().getResourceAsStream( resource );
+		int len = 0;
+		try {
+			int count = 0;
+			while( count >= 0 && len < buf.length ) {
+				len += count;
+				count = input.read( buf, len, buf.length - len );
+			}
+		} finally {
+			input.close();
+		}
+		return len;
+	}
 }
 
 final class WarehouseCanvas extends Canvas {
@@ -131,15 +151,18 @@ final class WarehouseCanvas extends Canvas {
 		TILE_CRATE = 4,
 		TILE_BLOKE = 6;
 
+	private List levelList;
 	private Image[] tileSet;
 	private byte[] map = new byte[ 32 * 32 ];
 	private byte[] levelData = new byte[ 16384 ];
+	private int[] levelOffsets = new int[ 256 ];
 	private int mapWidth, mapHeight, mapX, mapY, tileSize;
-	private int levelDataIdx, levelDataLen, level, numMoves, blokeIdx;
+	private int numLevels, levelIdx, numMoves, blokeIdx;
 	private Font statusFont = Font.getFont( Font.FACE_MONOSPACE, Font.STYLE_BOLD, Font.SIZE_SMALL );
 	private String statusText;
+	private Random random = new Random();
 
-	public WarehouseCanvas( String levelResource ) throws Exception {
+	public WarehouseCanvas( String gameResource, List levelList ) throws Exception {
 		// Initialize tile images.
 		tileSet = new Image[ 5 ];
 		tileSet[ 0 ] = Image.createImage( "/warehouse/images/tiles6.png" );
@@ -148,22 +171,63 @@ final class WarehouseCanvas extends Canvas {
 		tileSet[ 3 ] = Image.createImage( "/warehouse/images/tiles16.png" );
 		tileSet[ 4 ] = Image.createImage( "/warehouse/images/tiles24.png" );
 		// Initialize level data.
-		loadGame( levelResource );
+		loadGame( gameResource, levelList );
 	}
 
-	public void loadGame( String resource ) throws IOException {
-		InputStream input = getClass().getResourceAsStream( resource );
-		try {
-			int count = 0;
-			levelDataLen = 0;
-			while( count >= 0 && levelDataLen < levelData.length ) {
-				levelDataLen += count;
-				count = input.read( levelData, levelDataLen, levelData.length - levelDataLen );
+	public void loadGame( String gameResource, List levelList ) throws IOException {
+		this.levelList = levelList;
+		numLevels = 0;
+		int levelDataIdx = 0;
+		int levelDataLen = Warehouse.readResource( gameResource, levelData );
+		while( levelDataIdx < levelDataLen ) {
+			// Determine the number of levels and the offset of each.
+			levelOffsets[ numLevels++ ] = levelDataIdx;
+			levelList.append( buildLevelName( numLevels, 0 ), null );
+			int width = 0;
+			while( levelData[ levelDataIdx + width ] != '\n' ) {
+				width++;
 			}
-		} finally {
-			input.close();
+			int height = 1;
+			while( levelData[ levelDataIdx + ( width + 1 ) * height ] != '\n' ) {
+				height++;
+			}
+			levelDataIdx += ( width + 1 ) * height + 1;
 		}
-		initLevel( 1 );
+		setLevel( 0 );
+	}
+
+	public void setLevel( int level ) {
+		levelIdx = level % numLevels;
+		int levelDataIdx = levelOffsets[ levelIdx ];
+		// Calculate the size of the map.
+		mapWidth = 0;
+		while( levelData[ levelDataIdx + mapWidth ] != '\n' ) {
+			mapWidth++;
+		}
+		mapHeight = 1;
+		while( levelData[ levelDataIdx + ( mapWidth + 1 ) * mapHeight ] != '\n' ) {
+			mapHeight++;
+		}
+		// Decode the level data into the map.
+		int mapIdx = 0;
+		for( int y = 0; y < mapHeight; y++ ) {
+			for( int x = 0; x < mapWidth; x++ ) {
+				// Convert ASCII to tile index.
+				int tile = levelData[ levelDataIdx++ ] - '0';
+				map[ mapIdx ] = ( byte ) tile;
+				if( ( tile & -2 ) == TILE_BLOKE ) {
+					// Found the bloke in the map.
+					blokeIdx = mapIdx;
+				}
+				mapIdx++;
+			}
+			// Skip line feed.
+			levelDataIdx++;
+		}
+		numMoves = 0;
+		statusText = "Level " + ( levelIdx + 1 );
+		repaint();
+		levelList.setSelectedIndex( levelIdx, true );
 	}
 
 	public void paint( Graphics g ) {
@@ -244,19 +308,17 @@ final class WarehouseCanvas extends Canvas {
 		switch( key ) {
 			case KEY_STAR:
 				if( numMoves < 1 ) { // Skip.
-					initLevel( level + 10 );
+					setLevel( ( random.nextInt() & 0x7FFFFFFF ) % numLevels );
 				} else { // Reset.
-					initLevel( level );
+					setLevel( levelIdx );
 				}
-				repaint();
 				break;
 			case KEY_POUND:
 				if( numMoves < 1 ) {
-					initLevel( level + 1 );
+					setLevel( levelIdx + 1 );
 				} else {
-					initLevel( level );
+					setLevel( levelIdx );
 				}
-				repaint();
 				break;
 			default:
 				gameAction( getGameAction( key ) );
@@ -308,8 +370,9 @@ final class WarehouseCanvas extends Canvas {
 			}
 		}
 		if( complete ) {
-			initLevel( level + 1 );
-			repaint();	
+			// Change list text to indicate completed.
+			levelList.set( levelIdx,  buildLevelName( levelIdx + 1, numMoves ), null );
+			setLevel( levelIdx + 1 );
 		} else {
 			// Only repaint 9 tiles around the bloke.
 			int blokeX = blokeIdx % mapWidth;
@@ -319,60 +382,12 @@ final class WarehouseCanvas extends Canvas {
 			repaint( clipX, clipY, tileSize * 3, tileSize * 3 );
 		}
 	}
-
-	private void initLevel( int level ) {
-		// Find the specified level in the level data.
-		int width = mapWidth;
-		int height = mapHeight;
-		byte[] data = levelData;
-		int dataIdx = levelDataIdx;
-		int currentLevel = this.level;
-		if( level < currentLevel || currentLevel <= 1 ) {
-			// Start search from the beginning.
-			width = height = 0;
-			currentLevel = 0;
-			dataIdx = -1;
+	
+	private static String buildLevelName( int level, int moves ) {
+		String levelName = String.valueOf( level );
+		if( moves > 0 ) {
+			levelName = levelName + " (" + moves + " moves)";
 		}
-		while( currentLevel < level ) {
-			// Skip the current level.
-			currentLevel++;
-			dataIdx += ( width + 1 ) * height + 1;
-			if( dataIdx >= levelDataLen ) {
-				// Set the first level.
-				dataIdx = 0;
-				level = currentLevel = 1;
-			}
-			// Calculate the size of the map.
-			width = 0;
-			while( data[ dataIdx + width ] != '\n' ) {
-				width++;
-			}
-			height = 1;
-			while( data[ dataIdx + ( width + 1 ) * height ] != '\n' ) {
-				height++;
-			}
-			mapWidth = width;
-			mapHeight = height;
-			levelDataIdx = dataIdx;
-		}
-		// Decode the level data into the map.
-		int mapIdx = 0;
-		for( int y = 0; y < height; y++ ) {
-			for( int x = 0; x < width; x++ ) {
-				// Convert ASCII to tile index.
-				int tile = levelData[ dataIdx++ ] - '0';
-				map[ mapIdx ] = ( byte ) tile;
-				if( ( tile & -2 ) == TILE_BLOKE ) {
-					// Found the bloke in the map.
-					blokeIdx = mapIdx;
-				}
-				mapIdx++;
-			}
-			// Skip line feed.
-			dataIdx++;
-		}
-		numMoves = 0;
-		statusText = "Level " + level;
-		this.level = level;
+		return levelName;
 	}
 }
