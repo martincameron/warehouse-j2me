@@ -18,25 +18,33 @@ import javax.microedition.lcdui.Image;
 import javax.microedition.lcdui.Item;
 import javax.microedition.lcdui.List;
 import javax.microedition.lcdui.StringItem;
+import javax.microedition.lcdui.TextField;
 import javax.microedition.midlet.MIDlet;
 
 /*
 	A Sokoban clone for J2ME (c)2013 mumart@gmail.com
 */
 public final class Warehouse extends MIDlet implements CommandListener {
-	public static final String VERSION = "1.1 (c)2013 mumart@ gmail.com";
+	public static final String VERSION = "1.2 (c)2013 mumart@ gmail.com";
 
 	private WarehouseCanvas warehouseCanvas;
-	private Command backCommand, gameCommand, helpCommand, quitCommand;
+	private Command okCommand, backCommand, gameCommand, helpCommand, quitCommand;
+	private Command levelCommand, resetCommand, nextCommand, randomCommand;
+	private Form helpForm, levelForm;
+	private TextField levelField;
 	private List gameList;
-	private Form helpForm;
 
 	public Warehouse() throws Exception {
 		String[] games = readCatalog( "/warehouse/levels/levels.cat" );
+		okCommand = new Command( "OK", Command.OK, 1 );
 		backCommand = new Command( "Back", Command.BACK, 1 );
 		gameCommand = new Command( "Game", Command.SCREEN, 1 );
-		helpCommand = new Command( "Help", Command.SCREEN, 3 );
-		quitCommand = new Command( "Quit", Command.EXIT, 4 );
+		levelCommand = new Command( "Select Level", Command.SCREEN, 2 );
+		resetCommand = new Command( "Reset Level", Command.CANCEL, 3 );
+		nextCommand = new Command( "Skip Level (#)", Command.SCREEN, 4 );
+		randomCommand = new Command( "Random Level (*)", Command.SCREEN, 5 );
+		helpCommand = new Command( "Help", Command.SCREEN, 6 );
+		quitCommand = new Command( "Quit", Command.EXIT, 7 );
 		gameList = new List( "Select Game", List.IMPLICIT, games, null );
 		gameList.addCommand( backCommand );
 		gameList.setCommandListener( this );
@@ -52,7 +60,16 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		} );
 		helpForm.addCommand( backCommand );
 		helpForm.setCommandListener( this );
+		levelField = new TextField( "Level", "1", 3, TextField.NUMERIC );
+		levelForm = new Form( "Select Level", new Item[] { levelField } );
+		levelForm.addCommand( okCommand );
+		levelForm.addCommand( backCommand );
+		levelForm.setCommandListener( this );
 		warehouseCanvas.addCommand( gameCommand );
+		warehouseCanvas.addCommand( levelCommand );
+		warehouseCanvas.addCommand( resetCommand );
+		warehouseCanvas.addCommand( nextCommand );
+		warehouseCanvas.addCommand( randomCommand );
 		warehouseCanvas.addCommand( helpCommand );
 		warehouseCanvas.addCommand( quitCommand );
 		warehouseCanvas.setCommandListener( this );
@@ -78,8 +95,28 @@ public final class Warehouse extends MIDlet implements CommandListener {
 				String name = gameList.getString( gameList.getSelectedIndex() );
 				warehouseCanvas.loadGame( "/warehouse/levels/" + name + ".lev" );
 				display.setCurrent( warehouseCanvas );
+			} else if( c == levelCommand ) {
+				levelField.setString( String.valueOf( warehouseCanvas.getLevel() ) );
+				display.setCurrent( levelForm );
+			} else if( c == resetCommand ) {
+				warehouseCanvas.setLevel( warehouseCanvas.getLevel() );
+				display.setCurrent( warehouseCanvas );
+			} else if( c == nextCommand ) {
+				warehouseCanvas.setLevel( warehouseCanvas.getLevel() + 1 );
+				display.setCurrent( warehouseCanvas );
+			} else if( c == randomCommand ) {
+				warehouseCanvas.randomLevel();
+				display.setCurrent( warehouseCanvas );
 			} else if( c == helpCommand ) {
 				display.setCurrent( helpForm );
+			} else if( c == okCommand && d == levelForm ) {
+				int level = 1;
+				try {
+					level = Integer.parseInt( levelField.getString() );
+				} catch( NumberFormatException e ) {
+				}
+				warehouseCanvas.setLevel( level );
+				display.setCurrent( warehouseCanvas );
 			} else if( c == backCommand ) {
 				display.setCurrent( warehouseCanvas );
 			} else if( c == quitCommand ) {
@@ -145,8 +182,8 @@ final class WarehouseCanvas extends Canvas {
 	private int mapWidth, mapHeight, mapX, mapY, tileSize;
 	private int numLevels, levelIdx, numMoves, blokeIdx;
 	private Font statusFont = Font.getFont( Font.FACE_MONOSPACE, Font.STYLE_BOLD, Font.SIZE_SMALL );
-	private String statusText;
 	private Random random = new Random();
+	private String statusText;
 
 	public WarehouseCanvas( String gameResource ) throws Exception {
 		// Initialize tile images.
@@ -178,11 +215,20 @@ final class WarehouseCanvas extends Canvas {
 			}
 			levelDataIdx += ( width + 1 ) * height + 1;
 		}
-		setLevel( 0 );
+		setLevel( 1 );
+	}
+
+	public int getLevel() {
+		return levelIdx + 1;
+	}
+	
+	public void randomLevel() {
+		int rnd = random.nextInt() & 0x7FFFFFFF;
+		setLevel( ( rnd % numLevels ) + 1 );
 	}
 
 	public void setLevel( int level ) {
-		levelIdx = level % numLevels;
+		levelIdx = ( level - 1 ) % numLevels;
 		int levelDataIdx = levelOffsets[ levelIdx ];
 		// Calculate the size of the map.
 		mapWidth = 0;
@@ -295,17 +341,17 @@ final class WarehouseCanvas extends Canvas {
 	public void keyPressed( int key ) {
 		switch( key ) {
 			case KEY_STAR:
-				if( numMoves < 1 ) { // Skip.
-					setLevel( ( random.nextInt() & 0x7FFFFFFF ) % numLevels );
+				if( numMoves < 1 ) {
+					randomLevel();
 				} else { // Reset.
-					setLevel( levelIdx );
+					setLevel( getLevel() );
 				}
 				break;
 			case KEY_POUND:
-				if( numMoves < 1 ) {
-					setLevel( levelIdx + 1 );
+				if( numMoves < 1 ) { // Skip.
+					setLevel( getLevel() + 1 );
 				} else {
-					setLevel( levelIdx );
+					setLevel( getLevel() );
 				}
 				break;
 			default:
@@ -363,7 +409,8 @@ final class WarehouseCanvas extends Canvas {
 			if( numMoves < recordMoves || recordMoves < 1 ) {
 				levelRecords[ levelIdx ] = numMoves;
 			}
-			setLevel( levelIdx + 1 );
+			// Next level.
+			setLevel( getLevel() + 1 );
 		} else {
 			// Only repaint 9 tiles around the bloke.
 			int blokeX = blokeIdx % mapWidth;
