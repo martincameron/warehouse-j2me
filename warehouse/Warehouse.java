@@ -20,15 +20,17 @@ import javax.microedition.lcdui.List;
 import javax.microedition.lcdui.StringItem;
 import javax.microedition.lcdui.TextField;
 import javax.microedition.midlet.MIDlet;
+import javax.microedition.rms.RecordStore;
+import javax.microedition.rms.RecordStoreException;
 
 /*
 	A Sokoban clone for J2ME (c)2013 mumart@gmail.com
 */
 public final class Warehouse extends MIDlet implements CommandListener {
-	public static final String VERSION = "1.2 (c)2013 mumart@ gmail.com";
+	public static final String VERSION = "1.3 (c)2013 mumart@ gmail.com";
 
 	private WarehouseCanvas warehouseCanvas;
-	private Command okCommand, backCommand, gameCommand, helpCommand, quitCommand;
+	private Command okCommand, backCommand, gameCommand, helpCommand, clearCommand, quitCommand;
 	private Command levelCommand, resetCommand, nextCommand, randomCommand;
 	private Form helpForm, levelForm;
 	private TextField levelField;
@@ -40,11 +42,12 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		backCommand = new Command( "Back", Command.BACK, 1 );
 		gameCommand = new Command( "Game", Command.SCREEN, 1 );
 		levelCommand = new Command( "Select Level", Command.SCREEN, 2 );
-		resetCommand = new Command( "Reset Level", Command.CANCEL, 3 );
+		resetCommand = new Command( "Reset Level", Command.SCREEN, 3 );
 		nextCommand = new Command( "Skip Level (#)", Command.SCREEN, 4 );
 		randomCommand = new Command( "Random Level (*)", Command.SCREEN, 5 );
-		helpCommand = new Command( "Help", Command.SCREEN, 6 );
-		quitCommand = new Command( "Quit", Command.EXIT, 7 );
+		clearCommand = new Command( "Clear Game Data", Command.SCREEN, 6 );
+		helpCommand = new Command( "Help", Command.SCREEN, 7 );
+		quitCommand = new Command( "Quit", Command.EXIT, 8 );
 		gameList = new List( "Select Game", List.IMPLICIT, games, null );
 		gameList.addCommand( backCommand );
 		gameList.setCommandListener( this );
@@ -70,6 +73,7 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		warehouseCanvas.addCommand( resetCommand );
 		warehouseCanvas.addCommand( nextCommand );
 		warehouseCanvas.addCommand( randomCommand );
+		warehouseCanvas.addCommand( clearCommand );
 		warehouseCanvas.addCommand( helpCommand );
 		warehouseCanvas.addCommand( quitCommand );
 		warehouseCanvas.setCommandListener( this );
@@ -107,6 +111,10 @@ public final class Warehouse extends MIDlet implements CommandListener {
 			} else if( c == randomCommand ) {
 				warehouseCanvas.randomLevel();
 				display.setCurrent( warehouseCanvas );
+			} else if( c == clearCommand ) {
+				warehouseCanvas.clearGameData();
+				warehouseCanvas.setLevel( warehouseCanvas.getLevel() );
+				display.setCurrent( warehouseCanvas );
 			} else if( c == helpCommand ) {
 				display.setCurrent( helpForm );
 			} else if( c == okCommand && d == levelForm ) {
@@ -120,6 +128,7 @@ public final class Warehouse extends MIDlet implements CommandListener {
 			} else if( c == backCommand ) {
 				display.setCurrent( warehouseCanvas );
 			} else if( c == quitCommand ) {
+				warehouseCanvas.saveGameData();
 				notifyDestroyed();
 			}
 		} catch( Exception e ) {
@@ -177,12 +186,13 @@ final class WarehouseCanvas extends Canvas {
 	private Image[] tileSet;
 	private byte[] map = new byte[ 32 * 32 ];
 	private byte[] levelData = new byte[ 16384 ];
-	private int[] levelOffsets = new int[ 256 ];
-	private int[] levelRecords = new int[ 256 ];
+	private short[] levelOffsets = new short[ 256 ];
+	private byte[] gameRecord = new byte[ 256 * 2 ];
 	private int mapWidth, mapHeight, mapX, mapY, tileSize;
 	private int numLevels, levelIdx, numMoves, blokeIdx;
 	private Font statusFont = Font.getFont( Font.FACE_MONOSPACE, Font.STYLE_BOLD, Font.SIZE_SMALL );
 	private Random random = new Random();
+	private RecordStore recordStore;
 	private String statusText;
 
 	public WarehouseCanvas( String gameResource ) throws Exception {
@@ -197,14 +207,32 @@ final class WarehouseCanvas extends Canvas {
 		loadGame( gameResource );
 	}
 
+	public void saveGameData() {
+		if( recordStore != null ) {
+			try {
+				// Store any changes to the current game.
+				recordStore.setRecord( 1, gameRecord, 0, numLevels * 2 );
+			} catch( RecordStoreException e ) {
+				// Ignore errors.
+			}
+		}
+	}
+
+	public void clearGameData() {
+		// Initialize the record array.
+		for( int idx = 0, end = numLevels * 2; idx < end; idx++ ) {
+			gameRecord[ idx ] = 0;
+		}
+	}
+
 	public void loadGame( String gameResource ) throws IOException {
+		saveGameData();
 		numLevels = 0;
 		int levelDataIdx = 0;
 		int levelDataLen = Warehouse.readResource( gameResource, levelData );
 		while( levelDataIdx < levelDataLen ) {
 			// Determine the number of levels and the offset of each.
-			levelRecords[ numLevels ] = 0;
-			levelOffsets[ numLevels++ ] = levelDataIdx;
+			levelOffsets[ numLevels++ ] = ( short ) levelDataIdx;
 			int width = 0;
 			while( levelData[ levelDataIdx + width ] != '\n' ) {
 				width++;
@@ -214,6 +242,25 @@ final class WarehouseCanvas extends Canvas {
 				height++;
 			}
 			levelDataIdx += ( width + 1 ) * height + 1;
+		}
+		try {
+			clearGameData();
+			// Load the record for this game from the record store.
+			String recordStoreName = gameResource;
+			if( recordStoreName.length() > 32 ) {
+				// Use the first 32 characters of the resource path for the name.
+				recordStoreName = recordStoreName.substring( 0, 32 );
+			}
+			recordStore = RecordStore.openRecordStore( recordStoreName, true );
+			if( recordStore.getNumRecords() < 1 ) {
+				// Create new record.
+				recordStore.addRecord( gameRecord, 0, numLevels * 2 );
+			} else {
+				// Retrieve saved record.
+				recordStore.getRecord( 1, gameRecord, 0 );
+			}
+		} catch( RecordStoreException e ) {
+			// Ignore errors.
 		}
 		setLevel( 1 );
 	}
@@ -257,7 +304,9 @@ final class WarehouseCanvas extends Canvas {
 		}
 		numMoves = 0;
 		statusText = "Level " + ( levelIdx + 1 );
-		int recordMoves = levelRecords[ levelIdx ];
+		int recordMoves =
+			( ( gameRecord[ levelIdx * 2 ] & 0xFF ) << 8 )
+			| ( gameRecord[ levelIdx * 2 + 1 ] & 0xFF );
 		if( recordMoves > 0 ) {
 			statusText += " (" + recordMoves + " moves)";
 		}
@@ -296,9 +345,13 @@ final class WarehouseCanvas extends Canvas {
 		g.fillRect( 0, mapY + mapH, width, height - mapY - mapH );
 		// Draw the status text.
 		if( clipY < mapY ) {
+			int textX = ( width - statusFont.stringWidth( statusText ) ) >> 1;
+			if( textX < 0 ) {
+				textX = 0;
+			}
 			g.setColor( 0xFFCC00 );
 			g.setFont( statusFont );
-			g.drawString( statusText, mapX, mapY, Graphics.BOTTOM | Graphics.LEFT );
+			g.drawString( statusText, textX, mapY, Graphics.BOTTOM | Graphics.LEFT );
 		}
 		// Draw the map.
 		int mapIdx = 0;
@@ -404,10 +457,13 @@ final class WarehouseCanvas extends Canvas {
 			}
 		}
 		if( complete ) {
-			// Update the record number of moves for this level.
-			int recordMoves = levelRecords[ levelIdx ];
+			// Update the number of moves for this level.
+			int recordMoves =
+				( ( gameRecord[ levelIdx * 2 ] & 0xFF ) << 8 )
+				| ( gameRecord[ levelIdx * 2 + 1 ] & 0xFF );
 			if( numMoves < recordMoves || recordMoves < 1 ) {
-				levelRecords[ levelIdx ] = numMoves;
+				gameRecord[ levelIdx * 2 ] = ( byte ) ( numMoves >> 8 );
+				gameRecord[ levelIdx * 2 + 1 ] = ( byte ) numMoves;
 			}
 			// Next level.
 			setLevel( getLevel() + 1 );
