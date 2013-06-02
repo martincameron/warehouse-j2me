@@ -27,11 +27,12 @@ import javax.microedition.rms.RecordStoreException;
 	A Sokoban clone for J2ME (c)2013 mumart@gmail.com
 */
 public final class Warehouse extends MIDlet implements CommandListener {
-	public static final String VERSION = "1.3 (c)2013 mumart@ gmail.com";
+	public static final String VERSION = "1.4 (c)2013 mumart@ gmail.com";
 
 	private WarehouseCanvas warehouseCanvas;
-	private Command okCommand, backCommand, gameCommand, helpCommand, clearCommand, quitCommand;
-	private Command levelCommand, resetCommand, nextCommand, randomCommand;
+	private Command okCommand, backCommand, quitCommand, undoCommand;
+	private Command gameCommand, levelCommand, resetCommand, nextCommand;
+	private Command randomCommand, clearCommand, helpCommand;
 	private Form helpForm, levelForm;
 	private TextField levelField;
 	private List gameList;
@@ -40,14 +41,15 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		String[] games = readCatalog( "/warehouse/levels/levels.cat" );
 		okCommand = new Command( "OK", Command.OK, 1 );
 		backCommand = new Command( "Back", Command.BACK, 1 );
-		gameCommand = new Command( "Game", Command.SCREEN, 1 );
-		levelCommand = new Command( "Select Level", Command.SCREEN, 2 );
-		resetCommand = new Command( "Reset Level", Command.SCREEN, 3 );
-		nextCommand = new Command( "Skip Level (#)", Command.SCREEN, 4 );
-		randomCommand = new Command( "Random Level (*)", Command.SCREEN, 5 );
-		clearCommand = new Command( "Clear Game Data", Command.SCREEN, 6 );
-		helpCommand = new Command( "Help", Command.SCREEN, 7 );
-		quitCommand = new Command( "Quit", Command.EXIT, 8 );
+		quitCommand = new Command( "Quit", Command.EXIT, 1 );
+		undoCommand = new Command( "Undo", Command.SCREEN, 1 );
+		gameCommand = new Command( "Select Game", Command.SCREEN, 2 );
+		levelCommand = new Command( "Select Level", Command.SCREEN, 3 );
+		resetCommand = new Command( "Reset Level", Command.SCREEN, 4 );
+		nextCommand = new Command( "Next Level (#)", Command.SCREEN, 5 );
+		randomCommand = new Command( "Random Level (*)", Command.SCREEN, 6 );
+		clearCommand = new Command( "Clear Game Data", Command.SCREEN, 7 );
+		helpCommand = new Command( "Help", Command.SCREEN, 8 );
 		gameList = new List( "Select Game", List.IMPLICIT, games, null );
 		gameList.addCommand( backCommand );
 		gameList.setCommandListener( this );
@@ -68,6 +70,8 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		levelForm.addCommand( okCommand );
 		levelForm.addCommand( backCommand );
 		levelForm.setCommandListener( this );
+		warehouseCanvas.addCommand( quitCommand );
+		warehouseCanvas.addCommand( undoCommand );
 		warehouseCanvas.addCommand( gameCommand );
 		warehouseCanvas.addCommand( levelCommand );
 		warehouseCanvas.addCommand( resetCommand );
@@ -75,7 +79,6 @@ public final class Warehouse extends MIDlet implements CommandListener {
 		warehouseCanvas.addCommand( randomCommand );
 		warehouseCanvas.addCommand( clearCommand );
 		warehouseCanvas.addCommand( helpCommand );
-		warehouseCanvas.addCommand( quitCommand );
 		warehouseCanvas.setCommandListener( this );
 	}
 
@@ -93,7 +96,12 @@ public final class Warehouse extends MIDlet implements CommandListener {
 	public void commandAction( Command c, Displayable d ) {
 		Display display = Display.getDisplay( this );
 		try {
-			if( c == gameCommand ) {
+			if( c == quitCommand ) {
+				warehouseCanvas.saveGameData();
+				notifyDestroyed();
+			} else if( c == undoCommand ) {
+				warehouseCanvas.undoMove();
+			} else if( c == gameCommand ) {
 				display.setCurrent( gameList );
 			} else if( c == List.SELECT_COMMAND && d == gameList ) {
 				String name = gameList.getString( gameList.getSelectedIndex() );
@@ -127,9 +135,6 @@ public final class Warehouse extends MIDlet implements CommandListener {
 				display.setCurrent( warehouseCanvas );
 			} else if( c == backCommand ) {
 				display.setCurrent( warehouseCanvas );
-			} else if( c == quitCommand ) {
-				warehouseCanvas.saveGameData();
-				notifyDestroyed();
 			}
 		} catch( Exception e ) {
 			display.setCurrent( new Alert( "Error", e.getMessage(), null, null ) );
@@ -188,8 +193,9 @@ final class WarehouseCanvas extends Canvas {
 	private byte[] levelData = new byte[ 16384 ];
 	private short[] levelOffsets = new short[ 256 ];
 	private byte[] gameRecord = new byte[ 256 * 2 ];
+	private byte[] undoBuffer = new byte[ 256 ];
 	private int mapWidth, mapHeight, mapX, mapY, tileSize;
-	private int numLevels, levelIdx, numMoves, blokeIdx;
+	private int numLevels, levelIdx, numMoves, blokeIdx, undoIdx;
 	private Font statusFont = Font.getFont( Font.FACE_MONOSPACE, Font.STYLE_BOLD, Font.SIZE_SMALL );
 	private Random random = new Random();
 	private RecordStore recordStore;
@@ -302,14 +308,16 @@ final class WarehouseCanvas extends Canvas {
 			// Skip line feed.
 			levelDataIdx++;
 		}
-		numMoves = 0;
+		// Update status text.
 		statusText = "Level " + ( levelIdx + 1 );
-		int recordMoves =
-			( ( gameRecord[ levelIdx * 2 ] & 0xFF ) << 8 )
-			| ( gameRecord[ levelIdx * 2 + 1 ] & 0xFF );
+		int recordMoves = getRecordMoves();
 		if( recordMoves > 0 ) {
 			statusText += " (" + recordMoves + " moves)";
 		}
+		// Clear undo history.
+		undoIdx = 0;
+		undoBuffer[ undoIdx ] = 0;
+		numMoves = 0;
 		repaint();
 	}
 
@@ -421,6 +429,25 @@ final class WarehouseCanvas extends Canvas {
 		repaint();
 	}
 
+	public void undoMove() {
+		int move = undoBuffer[ undoIdx & 0xFF ];
+		int delta = move >> 1;
+		if( delta != 0 ) {
+			if( ( move & 1 ) == 0 ) {
+				map[ blokeIdx ] = ( byte ) ( TILE_FLOOR + ( map[ blokeIdx ] & 1 ) );
+			} else {
+				// Crate pushed.
+				map[ blokeIdx ] = ( byte ) ( TILE_CRATE + ( map[ blokeIdx ] & 1 ) );
+				map[ blokeIdx + delta ] = ( byte ) ( TILE_FLOOR + ( map[ blokeIdx + delta ] & 1 ) );
+			}				
+			blokeIdx -= delta;
+			map[ blokeIdx ] = ( byte ) ( TILE_BLOKE + ( map[ blokeIdx ] & 1 ) );
+			undoIdx--;
+			numMoves--;
+			repaint();
+		}
+	}
+
 	private void gameAction( int action ) {
 		// Decide where to move the bloke.
 		int delta = 0;
@@ -436,6 +463,8 @@ final class WarehouseCanvas extends Canvas {
 				map[ blokeIdx ] = ( byte ) ( TILE_FLOOR + ( map[ blokeIdx ] & 1 ) );
 				blokeIdx += delta;
 				map[ blokeIdx ] = ( byte ) ( TILE_BLOKE + ( map[ blokeIdx ] & 1 ) );
+				undoBuffer[ ( ++undoIdx ) & 0xFF ] = ( byte ) ( delta << 1 );
+				undoBuffer[ ( undoIdx + 1 ) & 0xFF ] = 0;
 				numMoves++;
 				break;
 			case TILE_CRATE:
@@ -444,8 +473,10 @@ final class WarehouseCanvas extends Canvas {
 					blokeIdx += delta;
 					map[ blokeIdx ] = ( byte ) ( TILE_BLOKE + ( map[ blokeIdx ] & 1 ) );
 					map[ blokeIdx + delta ] = ( byte ) ( TILE_CRATE + ( map[ blokeIdx + delta ] & 1 ) );
+					undoBuffer[ ( ++undoIdx ) & 0xFF ] = ( byte ) ( ( delta << 1 ) + 1 );
+					undoBuffer[ ( undoIdx + 1 ) & 0xFF ] = 0;
+					numMoves++;
 				}
-				numMoves++;
 				break;
 		}
 		// Decide whether the map is complete.
@@ -458,12 +489,9 @@ final class WarehouseCanvas extends Canvas {
 		}
 		if( complete ) {
 			// Update the number of moves for this level.
-			int recordMoves =
-				( ( gameRecord[ levelIdx * 2 ] & 0xFF ) << 8 )
-				| ( gameRecord[ levelIdx * 2 + 1 ] & 0xFF );
+			int recordMoves = getRecordMoves();
 			if( numMoves < recordMoves || recordMoves < 1 ) {
-				gameRecord[ levelIdx * 2 ] = ( byte ) ( numMoves >> 8 );
-				gameRecord[ levelIdx * 2 + 1 ] = ( byte ) numMoves;
+				setRecordMoves( numMoves );
 			}
 			// Next level.
 			setLevel( getLevel() + 1 );
@@ -475,5 +503,17 @@ final class WarehouseCanvas extends Canvas {
 			int clipY = mapY + ( blokeY - 1 ) * tileSize;
 			repaint( clipX, clipY, tileSize * 3, tileSize * 3 );
 		}
+	}
+	
+	private int getRecordMoves() {
+		// Get the number of moves stored for the current level.
+		int recIdx = levelIdx << 1;
+		return ( ( gameRecord[ recIdx ] & 0xFF ) << 8 ) | ( gameRecord[ recIdx + 1 ] & 0xFF );
+	}
+	
+	private void setRecordMoves( int numMoves ) {
+		int recIdx = levelIdx << 1;
+		gameRecord[ recIdx ] = ( byte ) ( numMoves >> 8 );
+		gameRecord[ recIdx + 1 ] = ( byte ) numMoves;
 	}
 }
