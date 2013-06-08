@@ -27,7 +27,7 @@ import javax.microedition.rms.RecordStoreException;
 	A Sokoban clone for J2ME (c)2013 mumart@gmail.com
 */
 public final class Warehouse extends MIDlet implements CommandListener {
-	public static final String VERSION = "1.4 (c)2013 mumart@ gmail.com";
+	public static final String VERSION = "1.5 (c)2013 mumart@ gmail.com";
 
 	private WarehouseCanvas warehouseCanvas;
 	private Command okCommand, backCommand, quitCommand, undoCommand;
@@ -196,6 +196,7 @@ final class WarehouseCanvas extends Canvas {
 	private byte[] undoBuffer = new byte[ 256 ];
 	private int mapWidth, mapHeight, mapX, mapY, tileSize;
 	private int numLevels, levelIdx, numMoves, blokeIdx, undoIdx;
+	private boolean gameRecordChanged;
 	private Font statusFont = Font.getFont( Font.FACE_MONOSPACE, Font.STYLE_BOLD, Font.SIZE_SMALL );
 	private Random random = new Random();
 	private RecordStore recordStore;
@@ -214,10 +215,11 @@ final class WarehouseCanvas extends Canvas {
 	}
 
 	public void saveGameData() {
-		if( recordStore != null ) {
+		if( recordStore != null && gameRecordChanged ) {
 			try {
 				// Store any changes to the current game.
 				recordStore.setRecord( 1, gameRecord, 0, numLevels * 2 );
+				gameRecordChanged = false;
 			} catch( RecordStoreException e ) {
 				// Ignore errors.
 			}
@@ -225,10 +227,10 @@ final class WarehouseCanvas extends Canvas {
 	}
 
 	public void clearGameData() {
-		// Initialize the record array.
 		for( int idx = 0, end = numLevels * 2; idx < end; idx++ ) {
 			gameRecord[ idx ] = 0;
 		}
+		gameRecordChanged = true;
 	}
 
 	public void loadGame( String gameResource ) throws IOException {
@@ -250,7 +252,10 @@ final class WarehouseCanvas extends Canvas {
 			levelDataIdx += ( width + 1 ) * height + 1;
 		}
 		try {
-			clearGameData();
+			// Initialize the record array.
+			for( int idx = 0, end = numLevels * 2; idx < end; idx++ ) {
+				gameRecord[ idx ] = 0;
+			}
 			// Load the record for this game from the record store.
 			String recordStoreName = gameResource;
 			if( recordStoreName.length() > 32 ) {
@@ -515,5 +520,6 @@ final class WarehouseCanvas extends Canvas {
 		int recIdx = levelIdx << 1;
 		gameRecord[ recIdx ] = ( byte ) ( numMoves >> 8 );
 		gameRecord[ recIdx + 1 ] = ( byte ) numMoves;
+		gameRecordChanged = true;
 	}
 }
